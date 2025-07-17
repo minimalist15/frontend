@@ -294,17 +294,19 @@ const NetworkGraph: React.FC = () => {
 
   // Update the click handler
   const handleNodeClick = useCallback((node: VisibleNetworkNode) => {
-    console.log('NetworkGraph: Node clicked, opening popup for:', node);
+    console.log('🚀 NetworkGraph: handleNodeClick called with node:', node.name, node.type);
+    console.log('🚀 NetworkGraph: Setting selectedNode to:', node);
     setSelectedNode(node);
   }, []);
 
   const handleClosePopup = useCallback(() => {
+    console.log('🚀 NetworkGraph: handleClosePopup called, clearing selectedNode');
     setSelectedNode(null);
   }, []);
 
   // Debug: Monitor selectedNode changes
   useEffect(() => {
-    console.log('NetworkGraph: selectedNode changed:', selectedNode);
+    console.log('🚀 NetworkGraph: selectedNode state changed to:', selectedNode?.name || 'null');
   }, [selectedNode]);
 
   // Monitor network data changes and ensure connections are preserved

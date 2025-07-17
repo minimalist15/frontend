@@ -55,9 +55,17 @@ const ForceGraph2D: React.FC<ForceGraph2DProps> = ({
   // Hover state
   const [hoveredNode, setHoveredNode] = useState<string | null>(null);
 
+  console.log('🎯 ForceGraph2D: Rendering with', {
+    nodes: nodes.length,
+    links: links.length,
+    preserveLayout,
+    hasGraphState: !!graphState,
+    cachedPositions: graphState?.nodePositions?.size || 0
+  });
+
   // Memoize stable nodes and links to prevent unnecessary re-renders
   const stableNodes = useMemo(() => {
-    return nodes.map(node => {
+    const result = nodes.map(node => {
       // If we have cached positions and preserveLayout is true, use them
       if (preserveLayout && graphState?.nodePositions?.has(node.id)) {
         const cached = graphState.nodePositions.get(node.id)!;
@@ -77,14 +85,18 @@ const ForceGraph2D: React.FC<ForceGraph2DProps> = ({
         fy: null
       };
     });
+    console.log('🎯 ForceGraph2D: Stable nodes created:', result.length);
+    return result;
   }, [nodes, width, height, graphState, preserveLayout]);
 
   const stableLinks = useMemo(() => {
-    return links.map(link => ({
+    const result = links.map(link => ({
       ...link,
       source: typeof link.source === 'string' ? link.source : link.source.id,
       target: typeof link.target === 'string' ? link.target : link.target.id
     }));
+    console.log('🎯 ForceGraph2D: Stable links created:', result.length);
+    return result;
   }, [links]);
 
   const getNodeColor = useCallback((type: string, isHighlighted: boolean, isHovered: boolean) => {
@@ -131,6 +143,8 @@ const ForceGraph2D: React.FC<ForceGraph2DProps> = ({
   const initializeGraph = useCallback(() => {
     if (!svgRef.current) return;
 
+    console.log('🎯 ForceGraph2D: Initializing graph...');
+
     const svg = d3.select(svgRef.current);
     svg.selectAll('*').remove();
 
@@ -163,14 +177,16 @@ const ForceGraph2D: React.FC<ForceGraph2DProps> = ({
       transformRef.current = transform;
     }
 
-    // Create links
+    // Create links with EXPLICIT visibility
     const linkElements = linksGroup.selectAll('line')
       .data(stableLinks)
       .enter()
       .append('line')
       .attr('stroke', '#999')
-      .attr('stroke-opacity', 0.4)
-      .attr('stroke-width', 1.5);
+      .attr('stroke-opacity', 0.6) // EXPLICIT opacity
+      .attr('stroke-width', 2); // EXPLICIT width
+
+    console.log('🔗 ForceGraph2D: Created', linkElements.size(), 'link elements');
 
     // Create nodes
     const nodeElements = nodesGroup.selectAll('circle')
@@ -183,16 +199,21 @@ const ForceGraph2D: React.FC<ForceGraph2DProps> = ({
       .attr('stroke-width', 2)
       .style('cursor', 'pointer')
       .on('mouseenter', (event, d) => {
+        console.log('🎯 ForceGraph2D: Mouse enter node:', d.name);
         setHoveredNode(d.id);
       })
       .on('mouseleave', () => {
+        console.log('🎯 ForceGraph2D: Mouse leave node');
         setHoveredNode(null);
       })
       .on('click', (event, d) => {
         event.stopPropagation();
-        console.log('Node clicked:', d);
+        console.log('🎯 ForceGraph2D: Node clicked:', d.name, 'onNodeClick exists:', !!onNodeClick);
         if (onNodeClick) {
+          console.log('🎯 ForceGraph2D: Calling onNodeClick with node:', d);
           onNodeClick(d);
+        } else {
+          console.error('🎯 ForceGraph2D: onNodeClick is not defined!');
         }
       })
       .call(d3.drag<SVGCircleElement, Node>()
@@ -241,6 +262,8 @@ const ForceGraph2D: React.FC<ForceGraph2DProps> = ({
           saveGraphState();
         }));
 
+    console.log('🎯 ForceGraph2D: Created', nodeElements.size(), 'node elements');
+
     // Create labels
     const labelElements = nodesGroup.selectAll('text')
       .data(stableNodes)
@@ -262,7 +285,7 @@ const ForceGraph2D: React.FC<ForceGraph2DProps> = ({
 
     // If we have cached positions, use them directly - NO SIMULATION
     if (preserveLayout && graphState?.nodePositions && graphState.nodePositions.size > 0) {
-      console.log('Using cached positions, no simulation');
+      console.log('🎯 ForceGraph2D: Using cached positions, no simulation');
       
       // Set positions immediately
       nodeElements
@@ -280,8 +303,8 @@ const ForceGraph2D: React.FC<ForceGraph2DProps> = ({
         .attr('y2', d => (d.target as Node).y!);
 
     } else {
-      // Run minimal simulation for initial layout only
-      console.log('Running minimal simulation for initial layout');
+      // Run MINIMAL simulation for initial layout only
+      console.log('🎯 ForceGraph2D: Running minimal simulation (3 ticks only)');
       
       const simulation = d3.forceSimulation<Node>(stableNodes)
         .force('link', d3.forceLink<Node, Link>(stableLinks)
@@ -294,12 +317,13 @@ const ForceGraph2D: React.FC<ForceGraph2DProps> = ({
 
       simulationRef.current = simulation;
 
-      // Run for exactly 3 ticks then stop
+      // Run for exactly 3 ticks then STOP FOREVER
       let tickCount = 0;
       const maxTicks = 3;
       
       simulation.on('tick', () => {
         tickCount++;
+        console.log(`🎯 ForceGraph2D: Simulation tick ${tickCount}/${maxTicks}`);
         
         linkElements
           .attr('x1', d => (d.source as Node).x!)
@@ -325,7 +349,7 @@ const ForceGraph2D: React.FC<ForceGraph2DProps> = ({
             node.fy = node.y;
           });
           
-          console.log('Simulation stopped, all positions fixed');
+          console.log('🎯 ForceGraph2D: Simulation STOPPED, all positions FIXED');
           saveGraphState();
         }
       });
@@ -340,6 +364,8 @@ const ForceGraph2D: React.FC<ForceGraph2DProps> = ({
 
     const svg = d3.select(svgRef.current);
     const connectedToHovered = hoveredNode ? getConnectedNodes(hoveredNode) : new Set();
+
+    console.log('🎯 ForceGraph2D: Updating hover effects for node:', hoveredNode);
 
     // Update node colors and stroke
     svg.selectAll('.nodes circle')
@@ -365,7 +391,7 @@ const ForceGraph2D: React.FC<ForceGraph2DProps> = ({
         return (isHovered || isConnectedToHovered) ? 1 : 0.3;
       });
 
-    // Update link highlighting
+    // Update link highlighting - ENSURE LINKS STAY VISIBLE
     svg.selectAll('.links line')
       .attr('stroke', (d: any) => {
         const sourceId = typeof d.source === 'string' ? d.source : d.source.id;
@@ -382,7 +408,7 @@ const ForceGraph2D: React.FC<ForceGraph2DProps> = ({
         
         const isConnectedToHovered = (sourceId === hoveredNode || targetId === hoveredNode);
         
-        return isConnectedToHovered ? 2.5 : 1.5;
+        return isConnectedToHovered ? 3 : 2;
       })
       .attr('stroke-opacity', (d: any) => {
         const sourceId = typeof d.source === 'string' ? d.source : d.source.id;
@@ -391,8 +417,8 @@ const ForceGraph2D: React.FC<ForceGraph2DProps> = ({
         const isConnectedToHovered = (sourceId === hoveredNode || targetId === hoveredNode);
         
         if (isConnectedToHovered) return 0.8;
-        if (hoveredNode) return 0.1;
-        return 0.4;
+        if (hoveredNode) return 0.3; // Fade but keep visible
+        return 0.6; // DEFAULT VISIBLE STATE
       });
 
     // Update label visibility - show on hover
@@ -409,6 +435,7 @@ const ForceGraph2D: React.FC<ForceGraph2DProps> = ({
   // Initialize graph when component mounts or data changes
   useEffect(() => {
     if (stableNodes.length > 0) {
+      console.log('🎯 ForceGraph2D: Data changed, reinitializing graph');
       initializedRef.current = false;
       initializeGraph();
     }
