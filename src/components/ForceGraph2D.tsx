@@ -182,7 +182,7 @@ const ForceGraph2D: React.FC<ForceGraph2DProps> = ({
         .strength(0.3))
       .force('charge', d3.forceManyBody().strength(-200))
       .force('center', d3.forceCenter(width / 2, height / 2))
-      .force('collision', d3.forceCollide().radius(d => Math.max(12, Math.min(25, d.connections * 2 + 5)));
+      .force('collision', d3.forceCollide().radius(d => Math.max(12, Math.min(25, d.connections * 2 + 5))));
 
     simulationRef.current = simulation;
 
