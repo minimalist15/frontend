@@ -47,7 +47,6 @@ const ForceGraph2D: React.FC<ForceGraph2DProps> = ({
   height = 600
 }) => {
   const svgRef = useRef<SVGSVGElement>(null);
-  const simulationRef = useRef<d3.Simulation<Node, Link> | null>(null);
   const zoomRef = useRef<d3.ZoomBehavior<SVGSVGElement, unknown> | null>(null);
   const transformRef = useRef<d3.ZoomTransform>(d3.zoomIdentity);
   const initializedRef = useRef(false);
@@ -55,40 +54,125 @@ const ForceGraph2D: React.FC<ForceGraph2DProps> = ({
   // Hover state
   const [hoveredNode, setHoveredNode] = useState<string | null>(null);
 
-  console.log('🎯 ForceGraph2D: Rendering with', {
+  console.log('🎯 ForceGraph2D: Rendering STATIC graph with', {
     nodes: nodes.length,
     links: links.length,
     preserveLayout,
     hasGraphState: !!graphState,
-    cachedPositions: graphState?.nodePositions?.size || 0,
-    onNodeClickExists: !!onNodeClick
+    cachedPositions: graphState?.nodePositions?.size || 0
   });
 
-  // Memoize stable nodes and links to prevent unnecessary re-renders
-  const stableNodes = useMemo(() => {
-    const result = nodes.map(node => {
-      // If we have cached positions and preserveLayout is true, use them
-      if (preserveLayout && graphState?.nodePositions?.has(node.id)) {
-        const cached = graphState.nodePositions.get(node.id)!;
+  // Static layout algorithms
+  const createStaticLayout = useCallback((nodeList: Node[], linkList: Link[]) => {
+    console.log('📐 Creating static layout for', nodeList.length, 'nodes');
+    
+    // If we have cached positions, use them
+    if (preserveLayout && graphState?.nodePositions && graphState.nodePositions.size > 0) {
+      console.log('📐 Using cached positions');
+      return nodeList.map(node => {
+        const cached = graphState.nodePositions.get(node.id);
+        if (cached) {
+          return {
+            ...node,
+            x: cached.x,
+            y: cached.y,
+            fx: cached.x,
+            fy: cached.y
+          };
+        }
+        // Fallback for nodes not in cache
         return {
           ...node,
-          x: cached.x,
-          y: cached.y,
-          fx: cached.x, // Fix position immediately
-          fy: cached.y
+          x: Math.random() * (width - 100) + 50,
+          y: Math.random() * (height - 100) + 50,
+          fx: node.x,
+          fy: node.y
         };
-      }
+      });
+    }
+
+    // Create new static layout
+    console.log('📐 Creating new static layout');
+    
+    // Method 1: Circle layout for smaller graphs
+    if (nodeList.length <= 50) {
+      const centerX = width / 2;
+      const centerY = height / 2;
+      const radius = Math.min(width, height) * 0.3;
+      
+      return nodeList.map((node, index) => {
+        const angle = (index / nodeList.length) * 2 * Math.PI;
+        const x = centerX + radius * Math.cos(angle);
+        const y = centerY + radius * Math.sin(angle);
+        
+        return {
+          ...node,
+          x,
+          y,
+          fx: x,
+          fy: y
+        };
+      });
+    }
+    
+    // Method 2: Grid layout for medium graphs
+    if (nodeList.length <= 200) {
+      const cols = Math.ceil(Math.sqrt(nodeList.length));
+      const rows = Math.ceil(nodeList.length / cols);
+      const cellWidth = (width - 100) / cols;
+      const cellHeight = (height - 100) / rows;
+      
+      return nodeList.map((node, index) => {
+        const col = index % cols;
+        const row = Math.floor(index / cols);
+        const x = 50 + col * cellWidth + cellWidth / 2;
+        const y = 50 + row * cellHeight + cellHeight / 2;
+        
+        return {
+          ...node,
+          x,
+          y,
+          fx: x,
+          fy: y
+        };
+      });
+    }
+    
+    // Method 3: Random but spaced layout for large graphs
+    const positions = new Set<string>();
+    const minDistance = 40;
+    
+    return nodeList.map(node => {
+      let x, y;
+      let attempts = 0;
+      
+      do {
+        x = Math.random() * (width - 100) + 50;
+        y = Math.random() * (height - 100) + 50;
+        attempts++;
+      } while (attempts < 100 && Array.from(positions).some(pos => {
+        const [px, py] = pos.split(',').map(Number);
+        return Math.sqrt((x - px) ** 2 + (y - py) ** 2) < minDistance;
+      }));
+      
+      positions.add(`${x},${y}`);
+      
       return {
         ...node,
-        x: node.x || Math.random() * width,
-        y: node.y || Math.random() * height,
-        fx: null,
-        fy: null
+        x,
+        y,
+        fx: x,
+        fy: y
       };
     });
-    console.log('🎯 ForceGraph2D: Stable nodes created:', result.length);
+  }, [width, height, graphState, preserveLayout]);
+
+  // Memoize static nodes and links
+  const stableNodes = useMemo(() => {
+    const result = createStaticLayout(nodes, links);
+    console.log('🎯 ForceGraph2D: Static nodes created:', result.length);
     return result;
-  }, [nodes, width, height, graphState, preserveLayout]);
+  }, [nodes, links, createStaticLayout]);
 
   const stableLinks = useMemo(() => {
     const result = links.map(link => ({
@@ -96,7 +180,7 @@ const ForceGraph2D: React.FC<ForceGraph2DProps> = ({
       source: typeof link.source === 'string' ? link.source : link.source.id,
       target: typeof link.target === 'string' ? link.target : link.target.id
     }));
-    console.log('🎯 ForceGraph2D: Stable links created:', result.length);
+    console.log('🎯 ForceGraph2D: Static links created:', result.length);
     return result;
   }, [links]);
 
@@ -141,10 +225,10 @@ const ForceGraph2D: React.FC<ForceGraph2DProps> = ({
     onGraphStateChange(state);
   }, [stableNodes, onGraphStateChange]);
 
-  const initializeGraph = useCallback(() => {
+  const initializeStaticGraph = useCallback(() => {
     if (!svgRef.current) return;
 
-    console.log('🎯 ForceGraph2D: Initializing graph...');
+    console.log('🎯 ForceGraph2D: Initializing STATIC graph...');
 
     const svg = d3.select(svgRef.current);
     svg.selectAll('*').remove();
@@ -178,7 +262,7 @@ const ForceGraph2D: React.FC<ForceGraph2DProps> = ({
       transformRef.current = transform;
     }
 
-    // Create links with EXPLICIT visibility and proper data binding
+    // Create links with proper positioning
     const linkElements = linksGroup.selectAll('line')
       .data(stableLinks)
       .enter()
@@ -186,9 +270,25 @@ const ForceGraph2D: React.FC<ForceGraph2DProps> = ({
       .attr('stroke', '#999')
       .attr('stroke-opacity', 0.6)
       .attr('stroke-width', 2)
-      .style('pointer-events', 'none'); // Prevent links from interfering with node clicks
+      .style('pointer-events', 'none')
+      .attr('x1', (d: any) => {
+        const sourceNode = stableNodes.find(n => n.id === d.source);
+        return sourceNode?.x || 0;
+      })
+      .attr('y1', (d: any) => {
+        const sourceNode = stableNodes.find(n => n.id === d.source);
+        return sourceNode?.y || 0;
+      })
+      .attr('x2', (d: any) => {
+        const targetNode = stableNodes.find(n => n.id === d.target);
+        return targetNode?.x || 0;
+      })
+      .attr('y2', (d: any) => {
+        const targetNode = stableNodes.find(n => n.id === d.target);
+        return targetNode?.y || 0;
+      });
 
-    console.log('🔗 ForceGraph2D: Created', linkElements.size(), 'link elements with explicit visibility');
+    console.log('🔗 ForceGraph2D: Created', linkElements.size(), 'static link elements');
 
     // Create nodes
     const nodeElements = nodesGroup.selectAll('circle')
@@ -199,6 +299,8 @@ const ForceGraph2D: React.FC<ForceGraph2DProps> = ({
       .attr('fill', d => getNodeColor(d.type, false, false))
       .attr('stroke', '#fff')
       .attr('stroke-width', 2)
+      .attr('cx', d => d.x!)
+      .attr('cy', d => d.y!)
       .style('cursor', 'pointer')
       .on('mouseenter', (event, d) => {
         console.log('🎯 ForceGraph2D: Mouse enter node:', d.name);
@@ -215,12 +317,10 @@ const ForceGraph2D: React.FC<ForceGraph2DProps> = ({
         if (onNodeClick) {
           console.log('🎯 ForceGraph2D: Calling onNodeClick with node:', d);
           onNodeClick(d);
-        } else {
-          console.error('🎯 ForceGraph2D: onNodeClick is not defined!');
         }
       });
 
-    console.log('🎯 ForceGraph2D: Created', nodeElements.size(), 'node elements');
+    console.log('🎯 ForceGraph2D: Created', nodeElements.size(), 'static node elements');
 
     // Create labels
     const labelElements = nodesGroup.selectAll('text')
@@ -234,6 +334,8 @@ const ForceGraph2D: React.FC<ForceGraph2DProps> = ({
       .attr('font-weight', '500')
       .attr('text-anchor', 'middle')
       .attr('dy', '0.35em')
+      .attr('x', d => d.x!)
+      .attr('y', d => d.y!)
       .attr('fill', '#1f2937')
       .attr('stroke', '#fff')
       .attr('stroke-width', '3')
@@ -241,119 +343,60 @@ const ForceGraph2D: React.FC<ForceGraph2DProps> = ({
       .style('pointer-events', 'none')
       .style('opacity', 0);
 
-    // Function to update link positions
-    const updateLinkPositions = () => {
-      linkElements
-        .attr('x1', (d: any) => {
-          const sourceNode = stableNodes.find(n => n.id === d.source);
-          return sourceNode?.x || 0;
-        })
-        .attr('y1', (d: any) => {
-          const sourceNode = stableNodes.find(n => n.id === d.source);
-          return sourceNode?.y || 0;
-        })
-        .attr('x2', (d: any) => {
-          const targetNode = stableNodes.find(n => n.id === d.target);
-          return targetNode?.x || 0;
-        })
-        .attr('y2', (d: any) => {
-          const targetNode = stableNodes.find(n => n.id === d.target);
-          return targetNode?.y || 0;
-        });
-    };
-
-    // Function to update node positions
-    const updateNodePositions = () => {
-      nodeElements
-        .attr('cx', d => d.x!)
-        .attr('cy', d => d.y!);
-
-      labelElements
-        .attr('x', d => d.x!)
-        .attr('y', d => d.y!);
-    };
-
-    // If we have cached positions, use them directly - NO SIMULATION
-    if (preserveLayout && graphState?.nodePositions && graphState.nodePositions.size > 0) {
-      console.log('🎯 ForceGraph2D: Using cached positions, no simulation');
-      
-      // Set positions immediately
-      updateNodePositions();
-      updateLinkPositions();
-
-    } else {
-      // Run MINIMAL simulation for initial layout only
-      console.log('🎯 ForceGraph2D: Running minimal simulation');
-      
-      const simulation = d3.forceSimulation<Node>(stableNodes)
-        .force('link', d3.forceLink<Node, Link>(stableLinks)
-          .id(d => d.id)
-          .distance(80)
-          .strength(0.3))
-        .force('charge', d3.forceManyBody().strength(-200))
-        .force('center', d3.forceCenter(width / 2, height / 2))
-        .force('collision', d3.forceCollide().radius(d => Math.max(12, Math.min(25, d.connections * 2 + 5))));
-
-      simulationRef.current = simulation;
-
-      // Run for exactly 50 ticks then STOP
-      let tickCount = 0;
-      const maxTicks = 50;
-      
-      simulation.on('tick', () => {
-        tickCount++;
-        console.log(`🎯 ForceGraph2D: Simulation tick ${tickCount}/${maxTicks}`);
-        
-        // Update positions on every tick
-        updateLinkPositions();
-        updateNodePositions();
-
-        // Stop after maxTicks
-        if (tickCount >= maxTicks) {
-          simulation.stop();
-          
-          // Fix ALL node positions permanently
-          stableNodes.forEach(node => {
-            node.fx = node.x;
-            node.fy = node.y;
-          });
-          
-          // Final position update to ensure links are visible
-          updateLinkPositions();
-          updateNodePositions();
-          
-          console.log('🎯 ForceGraph2D: Simulation STOPPED, all positions FIXED');
-          console.log('🔗 ForceGraph2D: Final link check - should be visible');
-          saveGraphState();
-        }
-      });
-    }
-
-    // Add drag behavior
+    // Add drag behavior for repositioning
     nodeElements.call(d3.drag<SVGCircleElement, Node>()
       .on('start', (event, d) => {
-        d.fx = d.x;
-        d.fy = d.y;
+        console.log('🎯 Drag started for:', d.name);
       })
       .on('drag', (event, d) => {
-        d.fx = event.x;
-        d.fy = event.y;
+        // Update node position
         d.x = event.x;
         d.y = event.y;
+        d.fx = event.x;
+        d.fy = event.y;
         
-        // Update positions immediately during drag
-        updateNodePositions();
-        updateLinkPositions();
+        // Update visual position
+        d3.select(event.sourceEvent.target)
+          .attr('cx', d.x)
+          .attr('cy', d.y);
+        
+        // Update label position
+        labelElements
+          .filter((labelNode: any) => labelNode.id === d.id)
+          .attr('x', d.x)
+          .attr('y', d.y);
+        
+        // Update connected links
+        linkElements
+          .attr('x1', (linkData: any) => {
+            const sourceNode = stableNodes.find(n => n.id === linkData.source);
+            return sourceNode?.x || 0;
+          })
+          .attr('y1', (linkData: any) => {
+            const sourceNode = stableNodes.find(n => n.id === linkData.source);
+            return sourceNode?.y || 0;
+          })
+          .attr('x2', (linkData: any) => {
+            const targetNode = stableNodes.find(n => n.id === linkData.target);
+            return targetNode?.x || 0;
+          })
+          .attr('y2', (linkData: any) => {
+            const targetNode = stableNodes.find(n => n.id === linkData.target);
+            return targetNode?.y || 0;
+          });
       })
       .on('end', (event, d) => {
-        // Keep the position fixed after dragging
-        d.fx = d.x;
-        d.fy = d.y;
+        console.log('🎯 Drag ended for:', d.name, 'at position:', d.x, d.y);
         saveGraphState();
       }));
 
+    // Save initial state
+    setTimeout(() => {
+      saveGraphState();
+    }, 100);
+
     initializedRef.current = true;
-  }, [stableNodes, stableLinks, width, height, getNodeColor, onNodeClick, graphState, preserveLayout, saveGraphState]);
+  }, [stableNodes, stableLinks, getNodeColor, onNodeClick, graphState, preserveLayout, saveGraphState]);
 
   // Update highlighting and hover effects
   useEffect(() => {
@@ -388,7 +431,7 @@ const ForceGraph2D: React.FC<ForceGraph2DProps> = ({
         return (isHovered || isConnectedToHovered) ? 1 : 0.3;
       });
 
-    // Update link highlighting - ENSURE LINKS STAY VISIBLE
+    // Update link highlighting
     svg.selectAll('.links line')
       .attr('stroke', (d: any) => {
         const sourceId = typeof d.source === 'string' ? d.source : d.source;
@@ -415,10 +458,10 @@ const ForceGraph2D: React.FC<ForceGraph2DProps> = ({
         
         if (isConnectedToHovered) return 0.8;
         if (hoveredNode) return 0.3;
-        return 0.6; // DEFAULT VISIBLE STATE - ALWAYS VISIBLE
+        return 0.6;
       });
 
-    // Update label visibility - show on hover
+    // Update label visibility
     svg.selectAll('.node-label')
       .style('opacity', (d: any) => {
         const isHovered = d.id === hoveredNode;
@@ -432,11 +475,11 @@ const ForceGraph2D: React.FC<ForceGraph2DProps> = ({
   // Initialize graph when component mounts or data changes
   useEffect(() => {
     if (stableNodes.length > 0) {
-      console.log('🎯 ForceGraph2D: Data changed, reinitializing graph');
+      console.log('🎯 ForceGraph2D: Data changed, initializing static graph');
       initializedRef.current = false;
-      initializeGraph();
+      initializeStaticGraph();
     }
-  }, [initializeGraph]);
+  }, [initializeStaticGraph]);
 
   // Zoom controls
   const handleZoomIn = () => {
@@ -508,6 +551,7 @@ const ForceGraph2D: React.FC<ForceGraph2DProps> = ({
         <div>• Drag background: Pan around</div>
         <div>• Hover nodes: See names & connections</div>
         <div>• Click nodes: View details</div>
+        <div>• Drag nodes: Reposition</div>
       </div>
 
       {/* Zoom Level Indicator */}
