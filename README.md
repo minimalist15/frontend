@@ -145,6 +145,30 @@ Here are some ideas for future development, based on unused tables/views and pot
 
 ---
 
+## App Screenshots
+
+Below are screenshots of the main features and dashboards of the News Aggregator Frontend:
+
+### Entity Popup (Article/Entity Details)
+
+| Overview | Sentiment | Publishers | News |
+|---|---|---|---|
+| ![Entity Overview](entity_popup_1.jpg) | ![Entity Sentiment](entity_popup_2.jpg) | ![Entity Publishers](entity_popup_3.jpg) | ![Entity News](entity_popup_4.jpg) |
+
+### Network Analysis
+
+| Full Network | Focused Network |
+|---|---|
+| ![Network Analysis Full](networkanalysis_1.jpg) | ![Network Analysis Focused](networkanalysis_2.jpg) |
+
+### Topic Hierarchy
+
+| Macro Topic View | Subtopic Drilldown |
+|---|---|
+| ![Topics Macro](topics_1.jpg) | ![Topics Subtopics](topics_2.jpg) |
+
+---
+
 ## Project Notes & Reflections
 
 - **Costs & API Usage:**
