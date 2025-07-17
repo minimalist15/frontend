@@ -6,25 +6,25 @@ export default defineConfig({
   plugins: [react()],
   optimizeDeps: {
     include: [
-      'ngraph.forcelayout', 
-      'ngraph.graph', 
-      'prop-types',
       'react-force-graph',
       'd3-force',
       'd3-drag',
       'd3-zoom',
-      'three'
+      'd3'
     ],
-    exclude: ['lucide-react'],
+    exclude: ['lucide-react', 'three'],
   },
   build: {
+    target: 'es2015',
+    sourcemap: false,
     rollupOptions: {
+      external: [],
       output: {
+        format: 'es',
         manualChunks: {
-          'react-force-graph': ['react-force-graph'],
-          'd3': ['d3-force', 'd3-drag', 'd3-zoom'],
-          'ngraph': ['ngraph.forcelayout', 'ngraph.graph'],
-          'three': ['three']
+          vendor: ['react', 'react-dom'],
+          'd3': ['d3', 'd3-force', 'd3-drag', 'd3-zoom'],
+          'force-graph': ['react-force-graph']
         }
       }
     }
@@ -34,8 +34,7 @@ export default defineConfig({
       overlay: false
     }
   },
-  define: {
-    // Prevent multiple Three.js instances
-    'process.env.NODE_ENV': JSON.stringify(process.env.NODE_ENV)
+  esbuild: {
+    target: 'es2015'
   }
 });
