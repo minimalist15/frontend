@@ -1,6 +1,12 @@
-import React, { useEffect, useRef, useMemo, useCallback } from 'react';
+import React, { useEffect, useRef, useMemo, useCallback, useState } from 'react';
 import * as d3 from 'd3';
 import { ZoomIn, ZoomOut, RotateCcw } from 'lucide-react';
+
+interface GraphState {
+  nodePositions: Map<string, { x: number; y: number }>;
+  zoomLevel: number;
+  center: { x: number; y: number };
+}
 
 interface Node {
   id: string;
@@ -23,7 +29,10 @@ interface ForceGraph2DProps {
   nodes: Node[];
   links: Link[];
   onNodeClick?: (node: Node) => void;
-  highlightedNode?: string | null;
+  highlightedNode?: Node | null;
+  graphState?: GraphState;
+  onGraphStateChange?: (state: GraphState) => void;
+  preserveLayout?: boolean;
   width?: number;
   height?: number;
 }
@@ -33,6 +42,9 @@ const ForceGraph2D: React.FC<ForceGraph2DProps> = ({
   links,
   onNodeClick,
   highlightedNode,
+  graphState,
+  onGraphStateChange,
+  preserveLayout = false,
   width = 800,
   height = 600
 }) => {
@@ -41,15 +53,32 @@ const ForceGraph2D: React.FC<ForceGraph2DProps> = ({
   const zoomRef = useRef<d3.ZoomBehavior<SVGSVGElement, unknown> | null>(null);
   const transformRef = useRef<d3.ZoomTransform>(d3.zoomIdentity);
   const initializedRef = useRef(false);
+  const animationCompleteRef = useRef(false);
+  
+  // Hover state
+  const [hoveredNode, setHoveredNode] = useState<string | null>(null);
 
-  // Stable nodes to prevent unnecessary re-renders
+  // Memoize stable nodes and links to prevent unnecessary re-renders
   const stableNodes = useMemo(() => {
-    return nodes.map(node => ({
-      ...node,
-      x: node.x || Math.random() * width,
-      y: node.y || Math.random() * height
-    }));
-  }, [nodes, width, height]);
+    return nodes.map(node => {
+      // If we have cached positions and preserveLayout is true, use them
+      if (preserveLayout && graphState?.nodePositions?.has(node.id)) {
+        const cached = graphState.nodePositions.get(node.id)!;
+        return {
+          ...node,
+          x: cached.x,
+          y: cached.y,
+          fx: cached.x, // Fix position to prevent movement
+          fy: cached.y
+        };
+      }
+      return {
+        ...node,
+        x: node.x || Math.random() * width,
+        y: node.y || Math.random() * height
+      };
+    });
+  }, [nodes, width, height, graphState, preserveLayout]);
 
   const stableLinks = useMemo(() => {
     return links.map(link => ({
@@ -59,12 +88,12 @@ const ForceGraph2D: React.FC<ForceGraph2DProps> = ({
     }));
   }, [links]);
 
-  const getNodeColor = useCallback((type: string, isHighlighted: boolean) => {
+  const getNodeColor = useCallback((type: string, isHighlighted: boolean, isHovered: boolean) => {
     const colors = {
-      'PERSON': isHighlighted ? '#1e40af' : '#3b82f6',
-      'LOCATION': isHighlighted ? '#059669' : '#10b981',
-      'ORGANIZATION': isHighlighted ? '#d97706' : '#f59e0b',
-      'default': isHighlighted ? '#6b7280' : '#9ca3af'
+      'PERSON': isHighlighted || isHovered ? '#1e40af' : '#3b82f6',
+      'LOCATION': isHighlighted || isHovered ? '#059669' : '#10b981',
+      'ORGANIZATION': isHighlighted || isHovered ? '#d97706' : '#f59e0b',
+      'default': isHighlighted || isHovered ? '#6b7280' : '#9ca3af'
     };
     return colors[type as keyof typeof colors] || colors.default;
   }, []);
@@ -81,8 +110,27 @@ const ForceGraph2D: React.FC<ForceGraph2DProps> = ({
     return connected;
   }, [stableLinks]);
 
+  const saveGraphState = useCallback(() => {
+    if (!onGraphStateChange || !stableNodes.length) return;
+    
+    const nodePositions = new Map<string, { x: number; y: number }>();
+    stableNodes.forEach(node => {
+      if (node.x !== undefined && node.y !== undefined) {
+        nodePositions.set(node.id, { x: node.x, y: node.y });
+      }
+    });
+
+    const state: GraphState = {
+      nodePositions,
+      zoomLevel: transformRef.current.k,
+      center: { x: transformRef.current.x, y: transformRef.current.y }
+    };
+
+    onGraphStateChange(state);
+  }, [stableNodes, onGraphStateChange]);
+
   const initializeGraph = useCallback(() => {
-    if (!svgRef.current || initializedRef.current) return;
+    if (!svgRef.current) return;
 
     const svg = d3.select(svgRef.current);
     svg.selectAll('*').remove();
@@ -102,20 +150,39 @@ const ForceGraph2D: React.FC<ForceGraph2DProps> = ({
       .on('zoom', (event) => {
         transformRef.current = event.transform;
         g.attr('transform', event.transform);
+        
+        // Update label visibility based on zoom level
+        svg.selectAll('.node-label')
+          .style('opacity', (d: any) => {
+            const isHighlighted = d.id === highlightedNode?.id;
+            const isHovered = d.id === hoveredNode;
+            const connectedNodes = hoveredNode ? getConnectedNodes(hoveredNode) : new Set();
+            const isConnected = connectedNodes.has(d.id);
+            return (isHighlighted || isHovered || isConnected || event.transform.k > 1.5) ? 1 : 0;
+          });
       });
 
     zoomRef.current = zoom;
     svg.call(zoom);
 
+    // Restore zoom state if available
+    if (graphState && preserveLayout) {
+      const transform = d3.zoomIdentity
+        .translate(graphState.center.x, graphState.center.y)
+        .scale(graphState.zoomLevel);
+      svg.call(zoom.transform, transform);
+      transformRef.current = transform;
+    }
+
     // Create simulation
     const simulation = d3.forceSimulation<Node>(stableNodes)
       .force('link', d3.forceLink<Node, Link>(stableLinks)
         .id(d => d.id)
-        .distance(100)
-        .strength(0.5))
-      .force('charge', d3.forceManyBody().strength(-300))
+        .distance(80)
+        .strength(0.3))
+      .force('charge', d3.forceManyBody().strength(-200))
       .force('center', d3.forceCenter(width / 2, height / 2))
-      .force('collision', d3.forceCollide().radius(25));
+      .force('collision', d3.forceCollide().radius(d => Math.max(12, Math.min(25, d.connections * 2 + 5)));
 
     simulationRef.current = simulation;
 
@@ -125,67 +192,105 @@ const ForceGraph2D: React.FC<ForceGraph2DProps> = ({
       .enter()
       .append('line')
       .attr('stroke', '#999')
-      .attr('stroke-opacity', 0.6)
-      .attr('stroke-width', 2);
+      .attr('stroke-opacity', 0.4)
+      .attr('stroke-width', 1.5);
 
     // Create nodes
     const nodeElements = nodesGroup.selectAll('circle')
       .data(stableNodes)
       .enter()
       .append('circle')
-      .attr('r', d => Math.max(8, Math.min(20, d.connections * 2)))
-      .attr('fill', d => getNodeColor(d.type, false))
+      .attr('r', d => Math.max(8, Math.min(20, d.connections * 1.5 + 5)))
+      .attr('fill', d => getNodeColor(d.type, false, false))
       .attr('stroke', '#fff')
       .attr('stroke-width', 2)
       .style('cursor', 'pointer')
-      .call(d3.drag<SVGCircleElement, Node>()
-        .on('start', (event, d) => {
-          if (!event.active && simulationRef.current) {
-            simulationRef.current.alphaTarget(0.3).restart();
-          }
-          d.fx = d.x;
-          d.fy = d.y;
-        })
-        .on('drag', (event, d) => {
-          d.fx = event.x;
-          d.fy = event.y;
-        })
-        .on('end', (event, d) => {
-          if (!event.active && simulationRef.current) {
-            simulationRef.current.alphaTarget(0);
-          }
-          d.fx = null;
-          d.fy = null;
-        }))
+      .on('mouseenter', (event, d) => {
+        setHoveredNode(d.id);
+      })
+      .on('mouseleave', () => {
+        setHoveredNode(null);
+      })
       .on('click', (event, d) => {
         event.stopPropagation();
         if (onNodeClick) {
           onNodeClick(d);
         }
-      });
+      })
+      .call(d3.drag<SVGCircleElement, Node>()
+        .on('start', (event, d) => {
+          if (!animationCompleteRef.current) return;
+          d.fx = d.x;
+          d.fy = d.y;
+        })
+        .on('drag', (event, d) => {
+          if (!animationCompleteRef.current) return;
+          d.fx = event.x;
+          d.fy = event.y;
+          d.x = event.x;
+          d.y = event.y;
+          
+          // Update positions immediately during drag
+          nodeElements.filter((node: any) => node.id === d.id)
+            .attr('cx', d.x)
+            .attr('cy', d.y);
+          
+          labelElements.filter((node: any) => node.id === d.id)
+            .attr('x', d.x)
+            .attr('y', d.y);
+          
+          // Update connected links
+          linkElements
+            .attr('x1', (link: any) => {
+              const source = typeof link.source === 'string' ? stableNodes.find(n => n.id === link.source) : link.source;
+              return source?.x || 0;
+            })
+            .attr('y1', (link: any) => {
+              const source = typeof link.source === 'string' ? stableNodes.find(n => n.id === link.source) : link.source;
+              return source?.y || 0;
+            })
+            .attr('x2', (link: any) => {
+              const target = typeof link.target === 'string' ? stableNodes.find(n => n.id === link.target) : link.target;
+              return target?.x || 0;
+            })
+            .attr('y2', (link: any) => {
+              const target = typeof link.target === 'string' ? stableNodes.find(n => n.id === link.target) : link.target;
+              return target?.y || 0;
+            });
+        })
+        .on('end', (event, d) => {
+          if (!animationCompleteRef.current) return;
+          // Keep the position fixed after dragging
+          d.fx = d.x;
+          d.fy = d.y;
+          saveGraphState();
+        }));
 
     // Create labels
     const labelElements = nodesGroup.selectAll('text')
       .data(stableNodes)
       .enter()
       .append('text')
+      .attr('class', 'node-label')
       .text(d => d.name)
-      .attr('font-size', '12px')
+      .attr('font-size', '11px')
       .attr('font-family', 'Arial, sans-serif')
+      .attr('font-weight', '500')
       .attr('text-anchor', 'middle')
       .attr('dy', '0.35em')
-      .attr('fill', '#333')
+      .attr('fill', '#1f2937')
+      .attr('stroke', '#fff')
+      .attr('stroke-width', '3')
+      .attr('paint-order', 'stroke')
       .style('pointer-events', 'none')
       .style('opacity', 0);
 
-    // Update positions on tick
-    simulation.on('tick', () => {
-      linkElements
-        .attr('x1', d => (d.source as Node).x!)
-        .attr('y1', d => (d.source as Node).y!)
-        .attr('x2', d => (d.target as Node).x!)
-        .attr('y2', d => (d.target as Node).y!);
-
+    // If we have cached positions and preserveLayout is true, don't run simulation
+    if (preserveLayout && graphState?.nodePositions && graphState.nodePositions.size > 0) {
+      console.log('Using cached positions, skipping simulation');
+      animationCompleteRef.current = true;
+      
+      // Set positions immediately
       nodeElements
         .attr('cx', d => d.x!)
         .attr('cy', d => d.y!);
@@ -193,64 +298,150 @@ const ForceGraph2D: React.FC<ForceGraph2DProps> = ({
       labelElements
         .attr('x', d => d.x!)
         .attr('y', d => d.y!);
-    });
 
-    // Stop simulation after initial animation
-    simulation.on('end', () => {
-      simulation.alpha(0);
-    });
+      linkElements
+        .attr('x1', d => (d.source as Node).x!)
+        .attr('y1', d => (d.source as Node).y!)
+        .attr('x2', d => (d.target as Node).x!)
+        .attr('y2', d => (d.target as Node).y!);
+
+      // Stop simulation immediately
+      simulation.stop();
+    } else {
+      console.log('Running initial simulation animation');
+      // Run simulation for initial layout only
+      let tickCount = 0;
+      const maxTicks = 100; // Limit animation duration
+      
+      simulation.on('tick', () => {
+        tickCount++;
+        
+        linkElements
+          .attr('x1', d => (d.source as Node).x!)
+          .attr('y1', d => (d.source as Node).y!)
+          .attr('x2', d => (d.target as Node).x!)
+          .attr('y2', d => (d.target as Node).y!);
+
+        nodeElements
+          .attr('cx', d => d.x!)
+          .attr('cy', d => d.y!);
+
+        labelElements
+          .attr('x', d => d.x!)
+          .attr('y', d => d.y!);
+
+        // Stop simulation after max ticks or when energy is low
+        if (tickCount >= maxTicks || simulation.alpha() < 0.01) {
+          simulation.stop();
+          animationCompleteRef.current = true;
+          
+          // Fix all node positions to prevent further movement
+          stableNodes.forEach(node => {
+            node.fx = node.x;
+            node.fy = node.y;
+          });
+          
+          console.log('Animation complete, positions fixed');
+          saveGraphState();
+        }
+      });
+    }
 
     initializedRef.current = true;
-  }, [stableNodes, stableLinks, width, height, getNodeColor, onNodeClick]);
+  }, [stableNodes, stableLinks, width, height, getNodeColor, onNodeClick, graphState, preserveLayout, saveGraphState, hoveredNode, getConnectedNodes, highlightedNode]);
 
-  // Update highlighting
+  // Update highlighting and hover effects
   useEffect(() => {
     if (!svgRef.current || !initializedRef.current) return;
 
     const svg = d3.select(svgRef.current);
-    const connectedNodes = highlightedNode ? getConnectedNodes(highlightedNode) : new Set();
+    const highlightedNodeId = highlightedNode?.id;
+    const connectedToHighlighted = highlightedNodeId ? getConnectedNodes(highlightedNodeId) : new Set();
+    const connectedToHovered = hoveredNode ? getConnectedNodes(hoveredNode) : new Set();
 
-    // Update node colors and labels
+    // Update node colors and stroke
     svg.selectAll('.nodes circle')
       .attr('fill', (d: any) => {
-        const isHighlighted = d.id === highlightedNode || connectedNodes.has(d.id);
-        return getNodeColor(d.type, isHighlighted);
+        const isHighlighted = d.id === highlightedNodeId;
+        const isHovered = d.id === hoveredNode;
+        const isConnectedToHighlighted = connectedToHighlighted.has(d.id);
+        const isConnectedToHovered = connectedToHovered.has(d.id);
+        
+        if (isHighlighted || isHovered || isConnectedToHighlighted || isConnectedToHovered) {
+          return getNodeColor(d.type, true, true);
+        }
+        return getNodeColor(d.type, false, false);
       })
-      .attr('stroke-width', (d: any) => d.id === highlightedNode ? 4 : 2);
+      .attr('stroke-width', (d: any) => {
+        const isHighlighted = d.id === highlightedNodeId;
+        const isHovered = d.id === hoveredNode;
+        return (isHighlighted || isHovered) ? 3 : 2;
+      })
+      .attr('opacity', (d: any) => {
+        if (!hoveredNode && !highlightedNodeId) return 1;
+        
+        const isHighlighted = d.id === highlightedNodeId;
+        const isHovered = d.id === hoveredNode;
+        const isConnectedToHighlighted = connectedToHighlighted.has(d.id);
+        const isConnectedToHovered = connectedToHovered.has(d.id);
+        
+        return (isHighlighted || isHovered || isConnectedToHighlighted || isConnectedToHovered) ? 1 : 0.3;
+      });
 
-    // Update link visibility
+    // Update link highlighting
     svg.selectAll('.links line')
       .attr('stroke', (d: any) => {
         const sourceId = typeof d.source === 'string' ? d.source : d.source.id;
         const targetId = typeof d.target === 'string' ? d.target : d.target.id;
-        const isConnected = (sourceId === highlightedNode || targetId === highlightedNode);
-        return isConnected ? '#ff6b6b' : '#999';
+        
+        const isConnectedToHighlighted = (sourceId === highlightedNodeId || targetId === highlightedNodeId);
+        const isConnectedToHovered = (sourceId === hoveredNode || targetId === hoveredNode);
+        
+        if (isConnectedToHighlighted) return '#ef4444';
+        if (isConnectedToHovered) return '#3b82f6';
+        return '#999';
       })
       .attr('stroke-width', (d: any) => {
         const sourceId = typeof d.source === 'string' ? d.source : d.source.id;
         const targetId = typeof d.target === 'string' ? d.target : d.target.id;
-        const isConnected = (sourceId === highlightedNode || targetId === highlightedNode);
-        return isConnected ? 3 : 2;
+        
+        const isConnectedToHighlighted = (sourceId === highlightedNodeId || targetId === highlightedNodeId);
+        const isConnectedToHovered = (sourceId === hoveredNode || targetId === hoveredNode);
+        
+        return (isConnectedToHighlighted || isConnectedToHovered) ? 2.5 : 1.5;
       })
       .attr('stroke-opacity', (d: any) => {
         const sourceId = typeof d.source === 'string' ? d.source : d.source.id;
         const targetId = typeof d.target === 'string' ? d.target : d.target.id;
-        const isConnected = (sourceId === highlightedNode || targetId === highlightedNode);
-        return isConnected ? 0.8 : 0.6;
+        
+        const isConnectedToHighlighted = (sourceId === highlightedNodeId || targetId === highlightedNodeId);
+        const isConnectedToHovered = (sourceId === hoveredNode || targetId === hoveredNode);
+        
+        if (isConnectedToHighlighted || isConnectedToHovered) return 0.8;
+        if (hoveredNode || highlightedNodeId) return 0.1;
+        return 0.4;
       });
 
-    // Show labels for highlighted nodes
-    svg.selectAll('.nodes text')
+    // Update label visibility
+    svg.selectAll('.node-label')
       .style('opacity', (d: any) => {
-        const isHighlighted = d.id === highlightedNode || connectedNodes.has(d.id);
-        return isHighlighted || transformRef.current.k > 1.5 ? 1 : 0;
+        const isHighlighted = d.id === highlightedNodeId;
+        const isHovered = d.id === hoveredNode;
+        const isConnectedToHighlighted = connectedToHighlighted.has(d.id);
+        const isConnectedToHovered = connectedToHovered.has(d.id);
+        
+        return (isHighlighted || isHovered || isConnectedToHighlighted || isConnectedToHovered || transformRef.current.k > 1.5) ? 1 : 0;
       });
 
-  }, [highlightedNode, getConnectedNodes, getNodeColor]);
+  }, [highlightedNode, hoveredNode, getConnectedNodes, getNodeColor]);
 
-  // Initialize graph
+  // Initialize graph when component mounts or data changes
   useEffect(() => {
-    initializeGraph();
+    if (stableNodes.length > 0) {
+      initializedRef.current = false;
+      animationCompleteRef.current = false;
+      initializeGraph();
+    }
   }, [initializeGraph]);
 
   // Zoom controls
@@ -282,33 +473,35 @@ const ForceGraph2D: React.FC<ForceGraph2DProps> = ({
   };
 
   return (
-    <div className="relative">
+    <div className="relative w-full h-full">
       <svg
         ref={svgRef}
-        width={width}
-        height={height}
-        className="border border-gray-300 rounded-lg bg-white"
+        width="100%"
+        height="100%"
+        viewBox={`0 0 ${width} ${height}`}
+        className="bg-gray-900 rounded-lg border border-gray-700"
+        style={{ minHeight: '600px' }}
       />
       
       {/* Zoom Controls */}
       <div className="absolute top-4 right-4 flex flex-col gap-2">
         <button
           onClick={handleZoomIn}
-          className="p-2 bg-white border border-gray-300 rounded-lg shadow-sm hover:bg-gray-50 transition-colors"
+          className="p-2 bg-gray-800 border border-gray-600 rounded-lg shadow-sm hover:bg-gray-700 transition-colors text-white"
           title="Zoom In"
         >
           <ZoomIn className="w-4 h-4" />
         </button>
         <button
           onClick={handleZoomOut}
-          className="p-2 bg-white border border-gray-300 rounded-lg shadow-sm hover:bg-gray-50 transition-colors"
+          className="p-2 bg-gray-800 border border-gray-600 rounded-lg shadow-sm hover:bg-gray-700 transition-colors text-white"
           title="Zoom Out"
         >
           <ZoomOut className="w-4 h-4" />
         </button>
         <button
           onClick={handleResetZoom}
-          className="p-2 bg-white border border-gray-300 rounded-lg shadow-sm hover:bg-gray-50 transition-colors"
+          className="p-2 bg-gray-800 border border-gray-600 rounded-lg shadow-sm hover:bg-gray-700 transition-colors text-white"
           title="Reset View"
         >
           <RotateCcw className="w-4 h-4" />
@@ -316,15 +509,15 @@ const ForceGraph2D: React.FC<ForceGraph2DProps> = ({
       </div>
 
       {/* Instructions */}
-      <div className="absolute bottom-4 left-4 bg-white/90 backdrop-blur-sm p-3 rounded-lg shadow-sm text-sm text-gray-600">
+      <div className="absolute bottom-4 left-4 bg-gray-800/90 backdrop-blur-sm p-3 rounded-lg shadow-sm text-sm text-gray-300 border border-gray-600">
         <div>• Mouse wheel: Zoom in/out</div>
         <div>• Drag background: Pan around</div>
-        <div>• Drag nodes: Reposition</div>
+        <div>• Hover nodes: See connections</div>
         <div>• Click nodes: View details</div>
       </div>
 
       {/* Zoom Level Indicator */}
-      <div className="absolute top-4 left-4 bg-white/90 backdrop-blur-sm px-3 py-1 rounded-lg shadow-sm text-sm text-gray-600">
+      <div className="absolute top-4 left-4 bg-gray-800/90 backdrop-blur-sm px-3 py-1 rounded-lg shadow-sm text-sm text-gray-300 border border-gray-600">
         Zoom: {Math.round(transformRef.current.k * 100)}%
       </div>
     </div>
