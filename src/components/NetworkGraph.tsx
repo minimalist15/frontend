@@ -294,9 +294,15 @@ const NetworkGraph: React.FC = () => {
 
   // Update the click handler
   const handleNodeClick = useCallback((node: VisibleNetworkNode) => {
-    console.log('🚀 NetworkGraph: handleNodeClick called with node:', node.name, node.type);
-    console.log('🚀 NetworkGraph: Setting selectedNode to:', node);
+    console.log('🚀 NetworkGraph: handleNodeClick called with node:', {
+      name: node.name,
+      type: node.type,
+      id: node.id,
+      connections: node.connections
+    });
+    console.log('🚀 NetworkGraph: Current selectedNode before setting:', selectedNode?.name || 'null');
     setSelectedNode(node);
+    console.log('🚀 NetworkGraph: selectedNode should now be set to:', node.name);
   }, []);
 
   const handleClosePopup = useCallback(() => {
@@ -306,7 +312,18 @@ const NetworkGraph: React.FC = () => {
 
   // Debug: Monitor selectedNode changes
   useEffect(() => {
-    console.log('🚀 NetworkGraph: selectedNode state changed to:', selectedNode?.name || 'null');
+    console.log('🚀 NetworkGraph: selectedNode state changed to:', {
+      name: selectedNode?.name || 'null',
+      type: selectedNode?.type || 'null',
+      hasValue: !!selectedNode
+    });
+    
+    if (selectedNode) {
+      console.log('🚀 NetworkGraph: EntityPopup should render with:', {
+        entityName: selectedNode.name,
+        entityType: selectedNode.type
+      });
+    }
   }, [selectedNode]);
 
   // Monitor network data changes and ensure connections are preserved
@@ -481,12 +498,18 @@ const NetworkGraph: React.FC = () => {
       </div>
 
       {/* Entity Popup */}
-      {selectedNode && (
+      {selectedNode && selectedNode.name && selectedNode.type && (
+        <>
+          {console.log('🚀 NetworkGraph: Rendering EntityPopup with:', {
+            entityName: selectedNode.name,
+            entityType: selectedNode.type
+          })}
         <EntityPopup
           entityName={selectedNode.name}
           entityType={selectedNode.type}
           onClose={handleClosePopup}
         />
+        </>
       )}
     </div>
   );

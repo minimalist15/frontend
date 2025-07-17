@@ -60,7 +60,8 @@ const ForceGraph2D: React.FC<ForceGraph2DProps> = ({
     links: links.length,
     preserveLayout,
     hasGraphState: !!graphState,
-    cachedPositions: graphState?.nodePositions?.size || 0
+    cachedPositions: graphState?.nodePositions?.size || 0,
+    onNodeClickExists: !!onNodeClick
   });
 
   // Memoize stable nodes and links to prevent unnecessary re-renders
@@ -177,16 +178,17 @@ const ForceGraph2D: React.FC<ForceGraph2DProps> = ({
       transformRef.current = transform;
     }
 
-    // Create links with EXPLICIT visibility
+    // Create links with EXPLICIT visibility and proper data binding
     const linkElements = linksGroup.selectAll('line')
       .data(stableLinks)
       .enter()
       .append('line')
       .attr('stroke', '#999')
-      .attr('stroke-opacity', 0.6) // EXPLICIT opacity
-      .attr('stroke-width', 2); // EXPLICIT width
+      .attr('stroke-opacity', 0.6)
+      .attr('stroke-width', 2)
+      .style('pointer-events', 'none'); // Prevent links from interfering with node clicks
 
-    console.log('🔗 ForceGraph2D: Created', linkElements.size(), 'link elements');
+    console.log('🔗 ForceGraph2D: Created', linkElements.size(), 'link elements with explicit visibility');
 
     // Create nodes
     const nodeElements = nodesGroup.selectAll('circle')
@@ -209,58 +211,14 @@ const ForceGraph2D: React.FC<ForceGraph2DProps> = ({
       .on('click', (event, d) => {
         event.stopPropagation();
         console.log('🎯 ForceGraph2D: Node clicked:', d.name, 'onNodeClick exists:', !!onNodeClick);
+        console.log('🎯 ForceGraph2D: Node data:', d);
         if (onNodeClick) {
           console.log('🎯 ForceGraph2D: Calling onNodeClick with node:', d);
           onNodeClick(d);
         } else {
           console.error('🎯 ForceGraph2D: onNodeClick is not defined!');
         }
-      })
-      .call(d3.drag<SVGCircleElement, Node>()
-        .on('start', (event, d) => {
-          d.fx = d.x;
-          d.fy = d.y;
-        })
-        .on('drag', (event, d) => {
-          d.fx = event.x;
-          d.fy = event.y;
-          d.x = event.x;
-          d.y = event.y;
-          
-          // Update positions immediately during drag
-          nodeElements.filter((node: any) => node.id === d.id)
-            .attr('cx', d.x)
-            .attr('cy', d.y);
-          
-          labelElements.filter((node: any) => node.id === d.id)
-            .attr('x', d.x)
-            .attr('y', d.y);
-          
-          // Update connected links
-          linkElements
-            .attr('x1', (link: any) => {
-              const source = typeof link.source === 'string' ? stableNodes.find(n => n.id === link.source) : link.source;
-              return source?.x || 0;
-            })
-            .attr('y1', (link: any) => {
-              const source = typeof link.source === 'string' ? stableNodes.find(n => n.id === link.source) : link.source;
-              return source?.y || 0;
-            })
-            .attr('x2', (link: any) => {
-              const target = typeof link.target === 'string' ? stableNodes.find(n => n.id === link.target) : link.target;
-              return target?.x || 0;
-            })
-            .attr('y2', (link: any) => {
-              const target = typeof link.target === 'string' ? stableNodes.find(n => n.id === link.target) : link.target;
-              return target?.y || 0;
-            });
-        })
-        .on('end', (event, d) => {
-          // Keep the position fixed after dragging
-          d.fx = d.x;
-          d.fy = d.y;
-          saveGraphState();
-        }));
+      });
 
     console.log('🎯 ForceGraph2D: Created', nodeElements.size(), 'node elements');
 
@@ -283,11 +241,29 @@ const ForceGraph2D: React.FC<ForceGraph2DProps> = ({
       .style('pointer-events', 'none')
       .style('opacity', 0);
 
-    // If we have cached positions, use them directly - NO SIMULATION
-    if (preserveLayout && graphState?.nodePositions && graphState.nodePositions.size > 0) {
-      console.log('🎯 ForceGraph2D: Using cached positions, no simulation');
-      
-      // Set positions immediately
+    // Function to update link positions
+    const updateLinkPositions = () => {
+      linkElements
+        .attr('x1', (d: any) => {
+          const sourceNode = stableNodes.find(n => n.id === d.source);
+          return sourceNode?.x || 0;
+        })
+        .attr('y1', (d: any) => {
+          const sourceNode = stableNodes.find(n => n.id === d.source);
+          return sourceNode?.y || 0;
+        })
+        .attr('x2', (d: any) => {
+          const targetNode = stableNodes.find(n => n.id === d.target);
+          return targetNode?.x || 0;
+        })
+        .attr('y2', (d: any) => {
+          const targetNode = stableNodes.find(n => n.id === d.target);
+          return targetNode?.y || 0;
+        });
+    };
+
+    // Function to update node positions
+    const updateNodePositions = () => {
       nodeElements
         .attr('cx', d => d.x!)
         .attr('cy', d => d.y!);
@@ -295,16 +271,19 @@ const ForceGraph2D: React.FC<ForceGraph2DProps> = ({
       labelElements
         .attr('x', d => d.x!)
         .attr('y', d => d.y!);
+    };
 
-      linkElements
-        .attr('x1', d => (d.source as Node).x!)
-        .attr('y1', d => (d.source as Node).y!)
-        .attr('x2', d => (d.target as Node).x!)
-        .attr('y2', d => (d.target as Node).y!);
+    // If we have cached positions, use them directly - NO SIMULATION
+    if (preserveLayout && graphState?.nodePositions && graphState.nodePositions.size > 0) {
+      console.log('🎯 ForceGraph2D: Using cached positions, no simulation');
+      
+      // Set positions immediately
+      updateNodePositions();
+      updateLinkPositions();
 
     } else {
       // Run MINIMAL simulation for initial layout only
-      console.log('🎯 ForceGraph2D: Running minimal simulation (3 ticks only)');
+      console.log('🎯 ForceGraph2D: Running minimal simulation');
       
       const simulation = d3.forceSimulation<Node>(stableNodes)
         .force('link', d3.forceLink<Node, Link>(stableLinks)
@@ -317,29 +296,19 @@ const ForceGraph2D: React.FC<ForceGraph2DProps> = ({
 
       simulationRef.current = simulation;
 
-      // Run for exactly 3 ticks then STOP FOREVER
+      // Run for exactly 50 ticks then STOP
       let tickCount = 0;
-      const maxTicks = 3;
+      const maxTicks = 50;
       
       simulation.on('tick', () => {
         tickCount++;
         console.log(`🎯 ForceGraph2D: Simulation tick ${tickCount}/${maxTicks}`);
         
-        linkElements
-          .attr('x1', d => (d.source as Node).x!)
-          .attr('y1', d => (d.source as Node).y!)
-          .attr('x2', d => (d.target as Node).x!)
-          .attr('y2', d => (d.target as Node).y!);
+        // Update positions on every tick
+        updateLinkPositions();
+        updateNodePositions();
 
-        nodeElements
-          .attr('cx', d => d.x!)
-          .attr('cy', d => d.y!);
-
-        labelElements
-          .attr('x', d => d.x!)
-          .attr('y', d => d.y!);
-
-        // Stop after exactly 3 ticks
+        // Stop after maxTicks
         if (tickCount >= maxTicks) {
           simulation.stop();
           
@@ -349,11 +318,39 @@ const ForceGraph2D: React.FC<ForceGraph2DProps> = ({
             node.fy = node.y;
           });
           
+          // Final position update to ensure links are visible
+          updateLinkPositions();
+          updateNodePositions();
+          
           console.log('🎯 ForceGraph2D: Simulation STOPPED, all positions FIXED');
+          console.log('🔗 ForceGraph2D: Final link check - should be visible');
           saveGraphState();
         }
       });
     }
+
+    // Add drag behavior
+    nodeElements.call(d3.drag<SVGCircleElement, Node>()
+      .on('start', (event, d) => {
+        d.fx = d.x;
+        d.fy = d.y;
+      })
+      .on('drag', (event, d) => {
+        d.fx = event.x;
+        d.fy = event.y;
+        d.x = event.x;
+        d.y = event.y;
+        
+        // Update positions immediately during drag
+        updateNodePositions();
+        updateLinkPositions();
+      })
+      .on('end', (event, d) => {
+        // Keep the position fixed after dragging
+        d.fx = d.x;
+        d.fy = d.y;
+        saveGraphState();
+      }));
 
     initializedRef.current = true;
   }, [stableNodes, stableLinks, width, height, getNodeColor, onNodeClick, graphState, preserveLayout, saveGraphState]);
@@ -394,8 +391,8 @@ const ForceGraph2D: React.FC<ForceGraph2DProps> = ({
     // Update link highlighting - ENSURE LINKS STAY VISIBLE
     svg.selectAll('.links line')
       .attr('stroke', (d: any) => {
-        const sourceId = typeof d.source === 'string' ? d.source : d.source.id;
-        const targetId = typeof d.target === 'string' ? d.target : d.target.id;
+        const sourceId = typeof d.source === 'string' ? d.source : d.source;
+        const targetId = typeof d.target === 'string' ? d.target : d.target;
         
         const isConnectedToHovered = (sourceId === hoveredNode || targetId === hoveredNode);
         
@@ -403,22 +400,22 @@ const ForceGraph2D: React.FC<ForceGraph2DProps> = ({
         return '#999';
       })
       .attr('stroke-width', (d: any) => {
-        const sourceId = typeof d.source === 'string' ? d.source : d.source.id;
-        const targetId = typeof d.target === 'string' ? d.target : d.target.id;
+        const sourceId = typeof d.source === 'string' ? d.source : d.source;
+        const targetId = typeof d.target === 'string' ? d.target : d.target;
         
         const isConnectedToHovered = (sourceId === hoveredNode || targetId === hoveredNode);
         
         return isConnectedToHovered ? 3 : 2;
       })
       .attr('stroke-opacity', (d: any) => {
-        const sourceId = typeof d.source === 'string' ? d.source : d.source.id;
-        const targetId = typeof d.target === 'string' ? d.target : d.target.id;
+        const sourceId = typeof d.source === 'string' ? d.source : d.source;
+        const targetId = typeof d.target === 'string' ? d.target : d.target;
         
         const isConnectedToHovered = (sourceId === hoveredNode || targetId === hoveredNode);
         
         if (isConnectedToHovered) return 0.8;
-        if (hoveredNode) return 0.3; // Fade but keep visible
-        return 0.6; // DEFAULT VISIBLE STATE
+        if (hoveredNode) return 0.3;
+        return 0.6; // DEFAULT VISIBLE STATE - ALWAYS VISIBLE
       });
 
     // Update label visibility - show on hover
