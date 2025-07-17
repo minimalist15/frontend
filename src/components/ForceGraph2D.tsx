@@ -45,8 +45,11 @@ const ForceGraph2D: React.FC<ForceGraph2DProps> = ({
 }) => {
   const svgRef = useRef<SVGSVGElement>(null);
   const simulationRef = useRef<d3.Simulation<VisibleNetworkNode, VisibleNetworkLink> | null>(null);
+  const zoomRef = useRef<d3.ZoomBehavior<SVGSVGElement, unknown> | null>(null);
+  const containerRef = useRef<d3.Selection<SVGGElement, unknown, null, undefined> | null>(null);
   const [isInitialized, setIsInitialized] = useState(false);
   const [draggedNode, setDraggedNode] = useState<VisibleNetworkNode | null>(null);
+  const [currentZoom, setCurrentZoom] = useState(1);
 
   // Dimensions
   const width = 800;
@@ -111,46 +114,95 @@ const ForceGraph2D: React.FC<ForceGraph2DProps> = ({
 
     const newState: GraphState = {
       nodePositions,
-      zoomLevel: 1, // D3 zoom level would go here
+      zoomLevel: currentZoom,
       center: { x: width / 2, y: height / 2 }
     };
 
     onGraphStateChange(newState);
-  }, [nodes, onGraphStateChange, width, height]);
+  }, [nodes, onGraphStateChange, currentZoom, width, height]);
 
-  // Initialize and update D3 force simulation
-  useEffect(() => {
-    if (!svgRef.current || nodes.length === 0) return;
-
-    const svg = d3.select(svgRef.current);
-    svg.selectAll("*").remove(); // Clear previous render
-
-    // Create container groups
-    const container = svg.append("g");
-    const linksGroup = container.append("g").attr("class", "links");
-    const nodesGroup = container.append("g").attr("class", "nodes");
-
-    // Apply cached positions if available
-    const nodesWithPositions = nodes.map(node => {
+  // Stable node data reference to prevent unnecessary re-renders
+  const stableNodes = useMemo(() => {
+    return nodes.map(node => {
       const cachedPosition = graphState?.nodePositions?.get(node.id);
       return {
         ...node,
-        x: cachedPosition?.x || Math.random() * width,
-        y: cachedPosition?.y || Math.random() * height
+        x: node.x || cachedPosition?.x || Math.random() * width,
+        y: node.y || cachedPosition?.y || Math.random() * height
       };
     });
+  }, [nodes, graphState?.nodePositions, width, height]);
 
-    // Create force simulation
-    const simulation = d3.forceSimulation(nodesWithPositions)
-      .force("link", d3.forceLink(links)
-        .id((d: any) => d.id)
-        .distance(100)
-        .strength(0.1))
-      .force("charge", d3.forceManyBody().strength(-300))
-      .force("center", d3.forceCenter(width / 2, height / 2))
-      .force("collision", d3.forceCollide().radius(d => getNodeSize(d as VisibleNetworkNode) + 5));
+  // Initialize and update D3 force simulation
+  useEffect(() => {
+    if (!svgRef.current || stableNodes.length === 0) return;
 
-    simulationRef.current = simulation;
+    const svg = d3.select(svgRef.current);
+    
+    // Only clear and recreate if not initialized or if nodes changed significantly
+    if (!isInitialized || !containerRef.current) {
+      svg.selectAll("*").remove();
+      
+      // Setup zoom behavior
+      const zoom = d3.zoom<SVGSVGElement, unknown>()
+        .scaleExtent([0.1, 4])
+        .on("zoom", (event) => {
+          if (containerRef.current) {
+            containerRef.current.attr("transform", event.transform);
+            setCurrentZoom(event.transform.k);
+          }
+        });
+
+      svg.call(zoom);
+      zoomRef.current = zoom;
+
+      // Create container groups
+      const container = svg.append("g");
+      containerRef.current = container;
+      
+      // Apply initial zoom if available
+      if (graphState?.zoomLevel && graphState.zoomLevel !== 1) {
+        const initialTransform = d3.zoomIdentity.scale(graphState.zoomLevel);
+        svg.call(zoom.transform, initialTransform);
+      }
+    }
+
+    const container = containerRef.current!;
+    
+    // Clear existing elements
+    container.selectAll(".links").remove();
+    container.selectAll(".nodes").remove();
+    container.selectAll(".labels").remove();
+
+    const linksGroup = container.append("g").attr("class", "links");
+    const nodesGroup = container.append("g").attr("class", "nodes");
+    const labelsGroup = container.append("g").attr("class", "labels");
+
+    // Create or update force simulation
+    if (!simulationRef.current) {
+      const simulation = d3.forceSimulation(stableNodes)
+        .force("link", d3.forceLink(links)
+          .id((d: any) => d.id)
+          .distance(100)
+          .strength(0.1))
+        .force("charge", d3.forceManyBody().strength(-300))
+        .force("center", d3.forceCenter(width / 2, height / 2))
+        .force("collision", d3.forceCollide().radius(d => getNodeSize(d as VisibleNetworkNode) + 5))
+        .alphaDecay(0.02)
+        .velocityDecay(0.4);
+
+      simulationRef.current = simulation;
+    } else {
+      // Update existing simulation with new data
+      simulationRef.current
+        .nodes(stableNodes)
+        .force("link", d3.forceLink(links)
+          .id((d: any) => d.id)
+          .distance(100)
+          .strength(0.1));
+    }
+
+    const simulation = simulationRef.current;
 
     // Create links
     const link = linksGroup
@@ -165,7 +217,7 @@ const ForceGraph2D: React.FC<ForceGraph2DProps> = ({
     // Create nodes
     const node = nodesGroup
       .selectAll("circle")
-      .data(nodesWithPositions)
+      .data(stableNodes)
       .enter()
       .append("circle")
       .attr("r", d => getNodeSize(d))
@@ -202,17 +254,23 @@ const ForceGraph2D: React.FC<ForceGraph2DProps> = ({
 
     // Add click handler
     node.on("click", (event, d) => {
+      event.stopPropagation();
       if (onNodeClick) {
         onNodeClick(d);
       }
     });
 
-    // Create labels for highlighted nodes
-    const labels = nodesGroup
+    // Create labels for highlighted nodes and when zoomed in
+    const shouldShowLabels = currentZoom > 1.5 || highlightedNode;
+    const labelsData = shouldShowLabels 
+      ? stableNodes.filter(d => 
+          currentZoom > 1.5 || highlightedNode?.id === d.id || isNodeConnected(d)
+        )
+      : [];
+
+    const labels = labelsGroup
       .selectAll("text")
-      .data(nodesWithPositions.filter(d => 
-        highlightedNode?.id === d.id || isNodeConnected(d)
-      ))
+      .data(labelsData)
       .enter()
       .append("text")
       .text(d => d.name)
@@ -220,7 +278,8 @@ const ForceGraph2D: React.FC<ForceGraph2DProps> = ({
       .attr("fill", "white")
       .attr("text-anchor", "middle")
       .attr("dy", d => getNodeSize(d) + 15)
-      .style("pointer-events", "none");
+      .style("pointer-events", "none")
+      .style("font-weight", "500");
 
     // Update positions on simulation tick
     simulation.on("tick", () => {
@@ -239,28 +298,45 @@ const ForceGraph2D: React.FC<ForceGraph2DProps> = ({
         .attr("y", d => d.y! + getNodeSize(d) + 15);
     });
 
-    // Stop simulation after initial layout
+    // Restart simulation if needed
     if (preserveLayout && graphState?.nodePositions) {
+      simulation.alpha(0.1).restart();
       setTimeout(() => {
-        simulation.stop();
+        simulation.alpha(0);
       }, 1000);
+    } else {
+      simulation.alpha(1).restart();
     }
 
     setIsInitialized(true);
 
-    // Cleanup
+    // Cleanup function
     return () => {
-      simulation.stop();
+      if (simulation) {
+        simulation.on("tick", null);
+      }
     };
-  }, [nodes, links, highlightedNode, graphState, preserveLayout, getNodeColor, getNodeSize, isNodeConnected, isLinkConnected, onNodeClick, saveGraphState, width, height]);
+  }, [stableNodes, links, highlightedNode, currentZoom, preserveLayout, graphState?.nodePositions, getNodeColor, getNodeSize, isNodeConnected, isLinkConnected, onNodeClick, saveGraphState, width, height, isInitialized]);
 
   // Save state periodically
   useEffect(() => {
     if (!isInitialized || !preserveLayout) return;
 
-    const interval = setInterval(saveGraphState, 2000);
+    const interval = setInterval(saveGraphState, 3000);
     return () => clearInterval(interval);
   }, [isInitialized, preserveLayout, saveGraphState]);
+
+  // Reset zoom function
+  const resetZoom = useCallback(() => {
+    if (zoomRef.current && svgRef.current) {
+      const svg = d3.select(svgRef.current);
+      svg.transition().duration(750).call(
+        zoomRef.current.transform,
+        d3.zoomIdentity
+      );
+      setCurrentZoom(1);
+    }
+  }, []);
 
   return (
     <div className="w-full h-full bg-gray-900 relative flex items-center justify-center">
@@ -268,9 +344,55 @@ const ForceGraph2D: React.FC<ForceGraph2DProps> = ({
         ref={svgRef}
         width={width}
         height={height}
-        className="border border-gray-700 rounded-lg"
+        className="border border-gray-700 rounded-lg cursor-grab"
         style={{ background: '#111827' }}
       />
+      
+      {/* Zoom controls */}
+      <div className="absolute top-4 right-4 flex flex-col space-y-2 z-20">
+        <button
+          onClick={() => {
+            if (zoomRef.current && svgRef.current) {
+              const svg = d3.select(svgRef.current);
+              svg.transition().duration(200).call(
+                zoomRef.current.scaleBy,
+                1.5
+              );
+            }
+          }}
+          className="bg-gray-800 hover:bg-gray-700 text-white p-2 rounded border border-gray-600 text-sm font-mono"
+          title="Zoom In"
+        >
+          +
+        </button>
+        <button
+          onClick={() => {
+            if (zoomRef.current && svgRef.current) {
+              const svg = d3.select(svgRef.current);
+              svg.transition().duration(200).call(
+                zoomRef.current.scaleBy,
+                1 / 1.5
+              );
+            }
+          }}
+          className="bg-gray-800 hover:bg-gray-700 text-white p-2 rounded border border-gray-600 text-sm font-mono"
+          title="Zoom Out"
+        >
+          −
+        </button>
+        <button
+          onClick={resetZoom}
+          className="bg-gray-800 hover:bg-gray-700 text-white p-1 rounded border border-gray-600 text-xs"
+          title="Reset Zoom"
+        >
+          Reset
+        </button>
+      </div>
+
+      {/* Zoom indicator */}
+      <div className="absolute bottom-4 right-4 bg-gray-800 border border-gray-600 rounded px-2 py-1 text-white text-xs z-20">
+        Zoom: {Math.round(currentZoom * 100)}%
+      </div>
       
       {/* Drag indicator */}
       {draggedNode && (
@@ -281,6 +403,16 @@ const ForceGraph2D: React.FC<ForceGraph2DProps> = ({
           </div>
         </div>
       )}
+
+      {/* Instructions */}
+      <div className="absolute bottom-4 left-4 bg-gray-800 border border-gray-600 rounded p-2 text-white text-xs max-w-xs z-20">
+        <div className="space-y-1">
+          <div>• Scroll or use +/− to zoom</div>
+          <div>• Drag to pan around</div>
+          <div>• Drag nodes to reposition</div>
+          <div>• Labels appear when zoomed in</div>
+        </div>
+      </div>
     </div>
   );
 };
