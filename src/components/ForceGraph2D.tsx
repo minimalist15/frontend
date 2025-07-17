@@ -1,5 +1,5 @@
 import React, { useRef, useEffect, useState, useMemo, useCallback } from 'react';
-import { ForceGraph2D as ForceGraphComponent } from 'react-force-graph';
+import ForceGraphComponent from 'react-force-graph/dist/react-force-graph-2d.mjs';
 import { NetworkNode, NetworkLink } from '../types/database';
 
 interface GraphState {
