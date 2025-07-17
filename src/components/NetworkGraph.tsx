@@ -59,7 +59,6 @@ const NetworkGraph: React.FC = () => {
   const [selectedEntities, setSelectedEntities] = useState<{ value: string; label: string; type: string }[]>([]);
 
   // Add this new state for highlighted node
-  const [highlightedNode, setHighlightedNode] = useState<VisibleNetworkNode | null>(null);
 
   // Fetch initial network data
   useEffect(() => {
@@ -295,22 +294,8 @@ const NetworkGraph: React.FC = () => {
 
   // Update the click handler
   const handleNodeClick = useCallback((node: VisibleNetworkNode) => {
-    console.log('NetworkGraph: Node clicked!', node);
-    
-    // If clicking the same node that's already highlighted, open popup
-    if (highlightedNode?.id === node.id) {
-      setSelectedNode(node);
-      setHighlightedNode(null); // Clear highlight when opening popup
-    } else {
-      // First click: highlight the node and its connections
-      setHighlightedNode(node);
-      setSelectedNode(null); // Close any open popup
-    }
-  }, [highlightedNode]);
-
-  // Add a clear highlight function
-  const handleClearHighlight = useCallback(() => {
-    setHighlightedNode(null);
+    console.log('NetworkGraph: Node clicked, opening popup for:', node);
+    setSelectedNode(node);
   }, []);
 
   const handleClosePopup = useCallback(() => {
@@ -441,19 +426,6 @@ const NetworkGraph: React.FC = () => {
             </button>
           </div>
           
-          {/* Clear Selection Button */}
-          {highlightedNode && (
-            <div className="mt-2">
-              <button
-                onClick={handleClearHighlight}
-                className="w-full px-4 py-2 bg-gray-600 hover:bg-gray-500 text-white rounded-lg transition-colors duration-200 text-sm"
-                title="Clear node selection"
-              >
-                Clear Selection
-              </button>
-            </div>
-          )}
-          
           {/* Restore Connections Button */}
           <div className="mt-2">
             <button
@@ -497,7 +469,6 @@ const NetworkGraph: React.FC = () => {
                 nodes={networkData.nodes}
                 links={networkData.links}
                 onNodeClick={handleNodeClick}
-                highlightedNode={highlightedNode} // Add this prop
                 graphState={graphState}
                 onGraphStateChange={handleGraphStateChange}
                 preserveLayout={true}

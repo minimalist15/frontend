@@ -29,7 +29,6 @@ interface ForceGraph2DProps {
   nodes: Node[];
   links: Link[];
   onNodeClick?: (node: Node) => void;
-  highlightedNode?: Node | null;
   graphState?: GraphState;
   onGraphStateChange?: (state: GraphState) => void;
   preserveLayout?: boolean;
@@ -41,7 +40,6 @@ const ForceGraph2D: React.FC<ForceGraph2DProps> = ({
   nodes,
   links,
   onNodeClick,
-  highlightedNode,
   graphState,
   onGraphStateChange,
   preserveLayout = false,
@@ -53,7 +51,6 @@ const ForceGraph2D: React.FC<ForceGraph2DProps> = ({
   const zoomRef = useRef<d3.ZoomBehavior<SVGSVGElement, unknown> | null>(null);
   const transformRef = useRef<d3.ZoomTransform>(d3.zoomIdentity);
   const initializedRef = useRef(false);
-  const animationCompleteRef = useRef(false);
   
   // Hover state
   const [hoveredNode, setHoveredNode] = useState<string | null>(null);
@@ -68,14 +65,16 @@ const ForceGraph2D: React.FC<ForceGraph2DProps> = ({
           ...node,
           x: cached.x,
           y: cached.y,
-          fx: cached.x, // Fix position to prevent movement
+          fx: cached.x, // Fix position immediately
           fy: cached.y
         };
       }
       return {
         ...node,
         x: node.x || Math.random() * width,
-        y: node.y || Math.random() * height
+        y: node.y || Math.random() * height,
+        fx: null,
+        fy: null
       };
     });
   }, [nodes, width, height, graphState, preserveLayout]);
@@ -150,16 +149,6 @@ const ForceGraph2D: React.FC<ForceGraph2DProps> = ({
       .on('zoom', (event) => {
         transformRef.current = event.transform;
         g.attr('transform', event.transform);
-        
-        // Update label visibility based on zoom level
-        svg.selectAll('.node-label')
-          .style('opacity', (d: any) => {
-            const isHighlighted = d.id === highlightedNode?.id;
-            const isHovered = d.id === hoveredNode;
-            const connectedNodes = hoveredNode ? getConnectedNodes(hoveredNode) : new Set();
-            const isConnected = connectedNodes.has(d.id);
-            return (isHighlighted || isHovered || isConnected || event.transform.k > 1.5) ? 1 : 0;
-          });
       });
 
     zoomRef.current = zoom;
@@ -173,18 +162,6 @@ const ForceGraph2D: React.FC<ForceGraph2DProps> = ({
       svg.call(zoom.transform, transform);
       transformRef.current = transform;
     }
-
-    // Create simulation
-    const simulation = d3.forceSimulation<Node>(stableNodes)
-      .force('link', d3.forceLink<Node, Link>(stableLinks)
-        .id(d => d.id)
-        .distance(80)
-        .strength(0.3))
-      .force('charge', d3.forceManyBody().strength(-200))
-      .force('center', d3.forceCenter(width / 2, height / 2))
-      .force('collision', d3.forceCollide().radius(d => Math.max(12, Math.min(25, d.connections * 2 + 5))));
-
-    simulationRef.current = simulation;
 
     // Create links
     const linkElements = linksGroup.selectAll('line')
@@ -213,18 +190,17 @@ const ForceGraph2D: React.FC<ForceGraph2DProps> = ({
       })
       .on('click', (event, d) => {
         event.stopPropagation();
+        console.log('Node clicked:', d);
         if (onNodeClick) {
           onNodeClick(d);
         }
       })
       .call(d3.drag<SVGCircleElement, Node>()
         .on('start', (event, d) => {
-          if (!animationCompleteRef.current) return;
           d.fx = d.x;
           d.fy = d.y;
         })
         .on('drag', (event, d) => {
-          if (!animationCompleteRef.current) return;
           d.fx = event.x;
           d.fy = event.y;
           d.x = event.x;
@@ -259,7 +235,6 @@ const ForceGraph2D: React.FC<ForceGraph2DProps> = ({
             });
         })
         .on('end', (event, d) => {
-          if (!animationCompleteRef.current) return;
           // Keep the position fixed after dragging
           d.fx = d.x;
           d.fy = d.y;
@@ -285,10 +260,9 @@ const ForceGraph2D: React.FC<ForceGraph2DProps> = ({
       .style('pointer-events', 'none')
       .style('opacity', 0);
 
-    // If we have cached positions and preserveLayout is true, don't run simulation
+    // If we have cached positions, use them directly - NO SIMULATION
     if (preserveLayout && graphState?.nodePositions && graphState.nodePositions.size > 0) {
-      console.log('Using cached positions, skipping simulation');
-      animationCompleteRef.current = true;
+      console.log('Using cached positions, no simulation');
       
       // Set positions immediately
       nodeElements
@@ -305,13 +279,24 @@ const ForceGraph2D: React.FC<ForceGraph2DProps> = ({
         .attr('x2', d => (d.target as Node).x!)
         .attr('y2', d => (d.target as Node).y!);
 
-      // Stop simulation immediately
-      simulation.stop();
     } else {
-      console.log('Running initial simulation animation');
-      // Run simulation for initial layout only
+      // Run minimal simulation for initial layout only
+      console.log('Running minimal simulation for initial layout');
+      
+      const simulation = d3.forceSimulation<Node>(stableNodes)
+        .force('link', d3.forceLink<Node, Link>(stableLinks)
+          .id(d => d.id)
+          .distance(80)
+          .strength(0.3))
+        .force('charge', d3.forceManyBody().strength(-200))
+        .force('center', d3.forceCenter(width / 2, height / 2))
+        .force('collision', d3.forceCollide().radius(d => Math.max(12, Math.min(25, d.connections * 2 + 5))));
+
+      simulationRef.current = simulation;
+
+      // Run for exactly 3 ticks then stop
       let tickCount = 0;
-      const maxTicks = 100; // Limit animation duration
+      const maxTicks = 3;
       
       simulation.on('tick', () => {
         tickCount++;
@@ -330,62 +315,54 @@ const ForceGraph2D: React.FC<ForceGraph2DProps> = ({
           .attr('x', d => d.x!)
           .attr('y', d => d.y!);
 
-        // Stop simulation after max ticks or when energy is low
-        if (tickCount >= maxTicks || simulation.alpha() < 0.01) {
+        // Stop after exactly 3 ticks
+        if (tickCount >= maxTicks) {
           simulation.stop();
-          animationCompleteRef.current = true;
           
-          // Fix all node positions to prevent further movement
+          // Fix ALL node positions permanently
           stableNodes.forEach(node => {
             node.fx = node.x;
             node.fy = node.y;
           });
           
-          console.log('Animation complete, positions fixed');
+          console.log('Simulation stopped, all positions fixed');
           saveGraphState();
         }
       });
     }
 
     initializedRef.current = true;
-  }, [stableNodes, stableLinks, width, height, getNodeColor, onNodeClick, graphState, preserveLayout, saveGraphState, hoveredNode, getConnectedNodes, highlightedNode]);
+  }, [stableNodes, stableLinks, width, height, getNodeColor, onNodeClick, graphState, preserveLayout, saveGraphState]);
 
   // Update highlighting and hover effects
   useEffect(() => {
     if (!svgRef.current || !initializedRef.current) return;
 
     const svg = d3.select(svgRef.current);
-    const highlightedNodeId = highlightedNode?.id;
-    const connectedToHighlighted = highlightedNodeId ? getConnectedNodes(highlightedNodeId) : new Set();
     const connectedToHovered = hoveredNode ? getConnectedNodes(hoveredNode) : new Set();
 
     // Update node colors and stroke
     svg.selectAll('.nodes circle')
       .attr('fill', (d: any) => {
-        const isHighlighted = d.id === highlightedNodeId;
         const isHovered = d.id === hoveredNode;
-        const isConnectedToHighlighted = connectedToHighlighted.has(d.id);
         const isConnectedToHovered = connectedToHovered.has(d.id);
         
-        if (isHighlighted || isHovered || isConnectedToHighlighted || isConnectedToHovered) {
+        if (isHovered || isConnectedToHovered) {
           return getNodeColor(d.type, true, true);
         }
         return getNodeColor(d.type, false, false);
       })
       .attr('stroke-width', (d: any) => {
-        const isHighlighted = d.id === highlightedNodeId;
         const isHovered = d.id === hoveredNode;
-        return (isHighlighted || isHovered) ? 3 : 2;
+        return isHovered ? 3 : 2;
       })
       .attr('opacity', (d: any) => {
-        if (!hoveredNode && !highlightedNodeId) return 1;
+        if (!hoveredNode) return 1;
         
-        const isHighlighted = d.id === highlightedNodeId;
         const isHovered = d.id === hoveredNode;
-        const isConnectedToHighlighted = connectedToHighlighted.has(d.id);
         const isConnectedToHovered = connectedToHovered.has(d.id);
         
-        return (isHighlighted || isHovered || isConnectedToHighlighted || isConnectedToHovered) ? 1 : 0.3;
+        return (isHovered || isConnectedToHovered) ? 1 : 0.3;
       });
 
     // Update link highlighting
@@ -394,10 +371,8 @@ const ForceGraph2D: React.FC<ForceGraph2DProps> = ({
         const sourceId = typeof d.source === 'string' ? d.source : d.source.id;
         const targetId = typeof d.target === 'string' ? d.target : d.target.id;
         
-        const isConnectedToHighlighted = (sourceId === highlightedNodeId || targetId === highlightedNodeId);
         const isConnectedToHovered = (sourceId === hoveredNode || targetId === hoveredNode);
         
-        if (isConnectedToHighlighted) return '#ef4444';
         if (isConnectedToHovered) return '#3b82f6';
         return '#999';
       })
@@ -405,41 +380,36 @@ const ForceGraph2D: React.FC<ForceGraph2DProps> = ({
         const sourceId = typeof d.source === 'string' ? d.source : d.source.id;
         const targetId = typeof d.target === 'string' ? d.target : d.target.id;
         
-        const isConnectedToHighlighted = (sourceId === highlightedNodeId || targetId === highlightedNodeId);
         const isConnectedToHovered = (sourceId === hoveredNode || targetId === hoveredNode);
         
-        return (isConnectedToHighlighted || isConnectedToHovered) ? 2.5 : 1.5;
+        return isConnectedToHovered ? 2.5 : 1.5;
       })
       .attr('stroke-opacity', (d: any) => {
         const sourceId = typeof d.source === 'string' ? d.source : d.source.id;
         const targetId = typeof d.target === 'string' ? d.target : d.target.id;
         
-        const isConnectedToHighlighted = (sourceId === highlightedNodeId || targetId === highlightedNodeId);
         const isConnectedToHovered = (sourceId === hoveredNode || targetId === hoveredNode);
         
-        if (isConnectedToHighlighted || isConnectedToHovered) return 0.8;
-        if (hoveredNode || highlightedNodeId) return 0.1;
+        if (isConnectedToHovered) return 0.8;
+        if (hoveredNode) return 0.1;
         return 0.4;
       });
 
-    // Update label visibility
+    // Update label visibility - show on hover
     svg.selectAll('.node-label')
       .style('opacity', (d: any) => {
-        const isHighlighted = d.id === highlightedNodeId;
         const isHovered = d.id === hoveredNode;
-        const isConnectedToHighlighted = connectedToHighlighted.has(d.id);
         const isConnectedToHovered = connectedToHovered.has(d.id);
         
-        return (isHighlighted || isHovered || isConnectedToHighlighted || isConnectedToHovered || transformRef.current.k > 1.5) ? 1 : 0;
+        return (isHovered || isConnectedToHovered) ? 1 : 0;
       });
 
-  }, [highlightedNode, hoveredNode, getConnectedNodes, getNodeColor]);
+  }, [hoveredNode, getConnectedNodes, getNodeColor]);
 
   // Initialize graph when component mounts or data changes
   useEffect(() => {
     if (stableNodes.length > 0) {
       initializedRef.current = false;
-      animationCompleteRef.current = false;
       initializeGraph();
     }
   }, [initializeGraph]);
@@ -512,7 +482,7 @@ const ForceGraph2D: React.FC<ForceGraph2DProps> = ({
       <div className="absolute bottom-4 left-4 bg-gray-800/90 backdrop-blur-sm p-3 rounded-lg shadow-sm text-sm text-gray-300 border border-gray-600">
         <div>• Mouse wheel: Zoom in/out</div>
         <div>• Drag background: Pan around</div>
-        <div>• Hover nodes: See connections</div>
+        <div>• Hover nodes: See names & connections</div>
         <div>• Click nodes: View details</div>
       </div>
 
