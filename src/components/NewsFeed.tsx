@@ -24,6 +24,7 @@ const NewsFeed: React.FC = () => {
     try {
       setLoading(true);
       const articles = await fetchFilteredNews({}, 50);
+      console.log('Fetched articles:', articles);
       setArticles(articles);
     } catch (error) {
       console.error('Error loading news:', error);

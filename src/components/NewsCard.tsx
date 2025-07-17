@@ -73,15 +73,20 @@ const NewsCard: React.FC<NewsCardProps> = ({ article, index }) => {
           <div className="flex items-center text-xs text-gray-400">
             <Clock size={12} className="mr-1" />
             {article.country}
+            {typeof article.sentiment_score === 'number' && (
+              <span className="ml-2 px-2 py-0.5 rounded bg-gray-700 text-cyan-300 font-semibold" title="Sentiment Score">
+                Sentiment: {article.sentiment_score}
+              </span>
+            )}
           </div>
         </div>
 
         <h3 className="text-xl font-bold text-white mb-3 group-hover:text-cyan-400 transition-colors duration-300 line-clamp-2">
-          {article.title_en}
+          {article.title_en && article.title_en.trim() !== '' ? article.title_en : article.title_original}
         </h3>
 
         <p className="text-gray-300 mb-4 line-clamp-3 leading-relaxed">
-          {article.snippet_en}
+          {article.snippet_en && article.snippet_en.trim() !== '' ? article.snippet_en : article.snippet_original}
         </p>
 
         <div className="flex items-center justify-between">

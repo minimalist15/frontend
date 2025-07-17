@@ -12,6 +12,9 @@ export interface NewsArticle {
   created_at: string;
   language: string;
   images?: any;
+  title_original?: string;
+  snippet_original?: string;
+  sentiment_score?: number;
 }
 
 // Fetch all available filter options
@@ -126,7 +129,7 @@ export const fetchFilteredNews = async (filters: NewsFilters, limit: number = 50
   try {
     let query = supabase
       .from('news')
-      .select('id, title_en, snippet_en, news_url, publisher, country, timestamp, created_at, language, images')
+      .select('id, title_en, title_original, snippet_en, snippet_original, news_url, publisher, country, timestamp, created_at, language, images, feature_engineering:feature_engineering!news_id(sentiment_score)')
       .order('timestamp', { ascending: false });
 
     // Apply country filter
@@ -251,8 +254,20 @@ export const fetchFilteredNews = async (filters: NewsFilters, limit: number = 50
       return [];
     }
 
-    console.log(`Fetched ${data?.length || 0} articles with filters:`, filters);
-    return data || [];
+    // After filtering, flatten sentiment_score from feature_engineering
+    const filteredData = (data || []).filter(article => {
+      if (!article.language || article.language.startsWith('en-')) {
+        return true;
+      }
+      // If language is not English and title_en is the same as title_original, omit
+      return article.title_en !== article.title_original;
+    }).map(article => ({
+      ...article,
+      sentiment_score: Array.isArray(article.feature_engineering) && article.feature_engineering.length > 0 ? article.feature_engineering[0].sentiment_score : undefined
+    }));
+
+    console.log(`Fetched ${filteredData.length} articles with filters:`, filters);
+    return filteredData;
   } catch (error) {
     console.error('Error fetching filtered news:', error);
     return [];
